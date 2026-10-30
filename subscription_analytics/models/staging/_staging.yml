@@ -1,0 +1,136 @@
+version: 2
+
+models:
+  - name: stg_plans
+    description: "Cleaned subscription plans. Grain: one row per plan_id."
+    columns:
+      - name: plan_id
+        description: "Primary key of the plan."
+        data_tests:
+          - unique
+          - not_null
+      - name: plan_name
+        description: "Human-readable plan name."
+      - name: billing_period
+        description: "How often the plan is billed: monthly or annual."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['monthly', 'annual']
+      - name: price_eur
+        description: "List price per billing period in EUR."
+
+  - name: stg_customers
+    description: "Cleaned customers, deduplicated to the latest version by updated_at. Grain: one row per customer_id."
+    columns:
+      - name: customer_id
+        description: "Primary key of the customer."
+        data_tests:
+          - unique
+          - not_null
+      - name: email
+        description: "Email, trimmed and lowercased; null when empty in the source."
+      - name: country
+        description: "ISO country code, trimmed and uppercased; null when empty in the source."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['BG', 'DE', 'ES', 'FR', 'GB', 'NL', 'RO']
+      - name: segment
+        description: "Customer segment: B2C or B2B."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['B2C', 'B2B']
+      - name: signup_date
+        description: "Date the customer signed up."
+      - name: created_at
+        description: "When the customer row was created in the source system."
+      - name: updated_at
+        description: "When the customer row was last updated; used to pick the latest duplicate."
+
+  - name: stg_subscriptions
+    description: "Cleaned subscriptions with the current plan only (no history). Grain: one row per subscription_id."
+    columns:
+      - name: subscription_id
+        description: "Primary key of the subscription."
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "Customer who owns the subscription."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: plan_id
+        description: "Current plan of the subscription."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_plans')
+                field: plan_id
+      - name: status
+        description: "Current status: active or canceled."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['active', 'canceled']
+      - name: is_active
+        description: "True when status is active."
+      - name: started_date
+        description: "Date the subscription started."
+      - name: canceled_date
+        description: "Date the subscription was canceled; null while active."
+      - name: updated_at
+        description: "When the subscription row was last updated in the source system."
+
+  - name: stg_payments
+    description: "Cleaned payments, deduplicated by payment_id keeping the latest created_at. Grain: one row per payment_id."
+    columns:
+      - name: payment_id
+        description: "Primary key of the payment."
+        data_tests:
+          - unique
+          - not_null
+      - name: subscription_id
+        description: "Subscription the payment belongs to."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_subscriptions')
+                field: subscription_id
+      - name: customer_id
+        description: "Customer who made the payment."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: payment_date
+        description: "Business date of the payment."
+      - name: amount_eur
+        description: "Payment amount in EUR."
+      - name: currency
+        description: "Payment currency code."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['EUR']
+      - name: status
+        description: "Payment outcome: succeeded or failed."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['succeeded', 'failed']
+      - name: is_successful
+        description: "True when status is succeeded."
+      - name: is_late_arrival
+        description: "True when the row was created in the source after its payment_date."
+      - name: created_at
+        description: "When the payment row was written in the source system."
