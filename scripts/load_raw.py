@@ -1,10 +1,16 @@
-﻿"""Load the generated CSV files into the DuckDB `raw` schema (the 'EL' of ELT)."""
+"""Load the generated CSV files into the DuckDB `raw` schema (the 'EL' of ELT)."""
+import os
 from pathlib import Path
 
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "subscription_analytics" / "subscription.duckdb"
+DB_PATH = Path(
+    os.environ.get(
+        "DUCKDB_PATH",
+        ROOT / "subscription_analytics" / "subscription.duckdb",
+    )
+)
 RAW_DIR = ROOT / "data" / "raw"
 TABLES = ["customers", "plans", "subscriptions", "payments"]
 

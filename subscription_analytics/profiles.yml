@@ -3,5 +3,5 @@ subscription_analytics:
   outputs:
     dev:
       type: duckdb
-      path: subscription.duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'subscription.duckdb') }}"
       threads: 4
