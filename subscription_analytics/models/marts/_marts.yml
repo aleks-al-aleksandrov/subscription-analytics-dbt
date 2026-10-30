@@ -180,3 +180,42 @@ models:
         description: "Timestamp when the payment record was created in the source system."
         data_tests:
           - not_null
+
+  - name: fct_mrr_monthly
+    description: "Monthly Recurring Revenue (MRR) summary at month-end. Grain: one row per calendar month (month_end_date)."
+    columns:
+      - name: month_start_date
+        description: "First calendar day of the month."
+        data_tests:
+          - unique
+          - not_null
+      - name: month_end_date
+        description: "Last calendar day of the month (primary key)."
+        data_tests:
+          - unique
+          - not_null
+      - name: active_subscriptions
+        description: "Count of subscriptions active as of month_end_date."
+        data_tests:
+          - not_null
+      - name: active_customers
+        description: "Count of distinct customers with an active subscription as of month_end_date."
+        data_tests:
+          - not_null
+      - name: new_subscriptions
+        description: "Count of subscriptions that started during the calendar month."
+        data_tests:
+          - not_null
+      - name: churned_subscriptions
+        description: "Count of subscriptions that were canceled during the calendar month."
+        data_tests:
+          - not_null
+      - name: mrr_eur
+        description: "Total normalized Monthly Recurring Revenue in EUR across all subscriptions active at month_end_date."
+        data_tests:
+          - not_null
+      - name: arr_eur
+        description: "Annualized Recurring Revenue in EUR (mrr_eur * 12)."
+        data_tests:
+          - not_null
+

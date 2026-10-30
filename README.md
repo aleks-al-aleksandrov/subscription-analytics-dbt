@@ -21,7 +21,7 @@ staging (views)               models/staging
         |
         v
 marts (tables & incremental)  models/marts
-  dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental)
+  dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental), fct_mrr_monthly
 ```
 
 I keep the layers strict:
@@ -139,6 +139,21 @@ Example rows from `snapshots.subs_snapshot`:
 | `sub_00091` | `basic_m` | `canceled` | `2026-08-23 00:00:00` | `NULL` | Canceled on `2026-08-23` |
 | `sub_00095` | `standard_m` | `active` | `2026-03-06 00:00:00` | `2026-09-29 00:00:00` | Initial `standard_m` plan |
 | `sub_00095` | `basic_m` | `active` | `2026-09-29 00:00:00` | `NULL` | Downgraded to `basic_m` on `2026-09-29` |
+
+## Metrics (`fct_mrr_monthly`)
+
+`fct_mrr_monthly` summarizes Monthly Recurring Revenue at a calendar-month grain (`month_end_date` is the primary key).
+
+### MRR definition
+
+- **Active at month-end**: A subscription is counted as active in a given month if `started_date <= month_end_date` and `(canceled_date is null or canceled_date > month_end_date)`.
+- **Normalized monthly recurring value (`monthly_value_eur`)**:
+  - Monthly plans contribute their full `price_eur` (`9.00`, `19.00`, or `39.00` EUR).
+  - Annual plans (`standard_a` at `190.00` EUR/year) are normalized to `round(price_eur / 12.0, 2)` (`15.83` EUR/month).
+- **`mrr_eur`**: The sum of `monthly_value_eur` across all subscriptions active as of `month_end_date`.
+- **`arr_eur`**: `mrr_eur * 12`.
+- **Month spine**: Generated dynamically from `min(started_date)` through `max(updated_at)` so only populated months within the dataset's time range are produced.
+- **Sanity testing**: `tests/assert_mrr_sanity.sql` verifies that `mrr_eur` and `active_subscriptions` are never null, zero, or negative—preventing an unloaded or empty month from silently appearing as `0.00` EUR MRR.
 
 ## Known limitations
 
