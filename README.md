@@ -155,9 +155,30 @@ Example rows from `snapshots.subs_snapshot`:
 - **Month spine**: Generated dynamically from `min(started_date)` through `max(updated_at)` so only populated months within the dataset's time range are produced.
 - **Sanity testing**: `tests/assert_mrr_sanity.sql` verifies that `mrr_eur` and `active_subscriptions` are never null, zero, or negative—preventing an unloaded or empty month from silently appearing as `0.00` EUR MRR.
 
+## Data quality & test coverage
+
+The project runs **77 data tests** across generic schema assertions and custom singular SQL tests:
+
+### What is covered by tests
+
+1. **Primary key integrity (`unique`, `not_null`)**: Every staging and mart model tests its primary key (`customer_id`, `plan_id`, `subscription_id`, `payment_id`, `month_end_date`).
+2. **Referential integrity (`relationships`)**: Foreign keys in `stg_subscriptions`, `stg_payments`, `fct_subscriptions`, and `fct_payments` are verified against their parent dimensions/facts.
+3. **Domain constraints (`accepted_values`)**: Validated on `country`, `segment`, `billing_period`, `currency`, subscription `status`, and payment `status`.
+4. **Business logic singular tests (`tests/`)**:
+   - `assert_cancel_after_start.sql`: Ensures no subscription has `canceled_date < started_date`.
+   - `assert_payment_amount_positive.sql`: Ensures all payment amounts are strictly positive (`amount_eur > 0`).
+   - `assert_no_conflicting_raw_duplicates.sql`: Checks `raw.payments` and `raw.customers` to ensure duplicate primary keys never contain conflicting cleaned business attributes (preventing `row_number()` deduplication from silently hiding data corruption).
+   - `assert_payment_reconciliation.sql`: Financial reconciliation test ensuring the count and total `amount_eur` of successful payments (`is_successful = true`) in `fct_payments` match `stg_payments` to the cent.
+   - `assert_mrr_sanity.sql`: Ensures monthly MRR and active subscription counts are strictly positive and non-null for every calendar month in `fct_mrr_monthly`.
+
+### What remains uncovered
+
+- **Source freshness / SLA checks**: Because the data is generated locally from CSVs rather than streamed from a live production database, `dbt source freshness` is not configured.
+- **Late arrivals beyond the 7-day lookback window**: If a payment arrives more than 7 days after its `payment_date` and after the high-water mark has advanced, an incremental run of `fct_payments` would not pick it up until `assert_payment_reconciliation.sql` flags the discrepancy or a `--full-refresh` is run.
+- **Historical MRR plan transitions**: `fct_mrr_monthly` joins against `fct_subscriptions` (current plan) rather than `snapshots.subs_snapshot`, so past months reflect the subscription's current plan rather than the historical plan prior to an upgrade/downgrade.
+
 ## Known limitations
 
 - The data is synthetic, so it only reflects the scenarios built into the generator.
 - I started with BigQuery, but the free sandbox doesn't allow DML (MERGE, INSERT, UPDATE). Incremental models and snapshots need that, so I moved to DuckDB.
 - `stg_subscriptions` only stores the current state of each subscription. `subs_snapshot` tracks changes across loads, though it only captures states that were present when `dbt snapshot` ran (intermediate changes between snapshot runs would not be seen).
-- If two duplicate rows have different values (for example a different amount), deduplication just picks one and nobody notices. I plan to add a test that catches conflicting duplicates in raw.
