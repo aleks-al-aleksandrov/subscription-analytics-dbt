@@ -17,6 +17,8 @@ raw (tables)
 staging (views)               models/staging
   stg_customers, stg_plans, stg_subscriptions, stg_payments
         |
+        +---> snapshots (SCD Type 2)     snapshots/subs_snapshot.sql
+        |
         v
 marts (tables & incremental)  models/marts
   dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental)
@@ -98,9 +100,49 @@ In the source data, around 2% of payments arrive 3–6 days after their `payment
   - On cloud warehouses with large clustered tables (like BigQuery or Snowflake), `merge` can sometimes avoid rewriting unchanged columns, whereas `delete+insert` marks deleted rows and appends new micro-partitions.
   - If a payment arrived more than 7 days late, the lookback window would miss it; a periodic `--full-refresh` (or filtering on an ingestion watermark with a lookback) would be needed to catch extreme outliers.
 
+## Snapshots & SCD Type 2 history (`subs_snapshot`)
+
+Source subscription records are overwritten in place whenever a customer upgrades/downgrades their plan or cancels. Querying `stg_subscriptions` alone only shows the **current** `plan_id` and `status` as of the latest load, losing the historical state needed to audit plan transitions or point-in-time subscription attributes.
+
+To preserve history, `snapshots/subs_snapshot.sql` implements an **SCD Type 2** snapshot on top of `stg_subscriptions` (`unique_key='subscription_id'`, `strategy='timestamp'`, `updated_at='updated_at'`).
+
+### Two-batch execution workflow
+
+```powershell
+# 1. Load initial source state (as of 2026-06-30) and capture initial snapshot
+python scripts\generate_data.py --as-of 2026-06-30
+python scripts\load_raw.py
+cd subscription_analytics
+dbt build --profiles-dir .
+cd ..
+
+# 2. Load later source state (as of 2026-09-30) and record SCD Type 2 changes
+python scripts\generate_data.py --as-of 2026-09-30
+python scripts\load_raw.py
+cd subscription_analytics
+dbt build --profiles-dir .
+```
+
+(`dbt build` automatically executes `dbt snapshot` alongside models and tests.)
+
+### Validating historical versions in `snapshots.subs_snapshot`
+
+After running both batches:
+- `stg_subscriptions` has `2,000` rows (one current row per subscription).
+- `snapshots.subs_snapshot` has `2,084` rows across those `2,000` subscriptions: `84` subscriptions that changed plans or canceled between `2026-06-30` and `2026-09-30` have two rows—an closed historical version (`dbt_valid_to IS NOT NULL`) and an open current version (`dbt_valid_to IS NULL`).
+
+Example rows from `snapshots.subs_snapshot`:
+
+| `subscription_id` | `plan_id` | `status` | `dbt_valid_from` | `dbt_valid_to` |Change captured |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `sub_00091` | `basic_m` | `active` | `2025-10-30 00:00:00` | `2026-08-23 00:00:00` | Historical active state |
+| `sub_00091` | `basic_m` | `canceled` | `2026-08-23 00:00:00` | `NULL` | Canceled on `2026-08-23` |
+| `sub_00095` | `standard_m` | `active` | `2026-03-06 00:00:00` | `2026-09-29 00:00:00` | Initial `standard_m` plan |
+| `sub_00095` | `basic_m` | `active` | `2026-09-29 00:00:00` | `NULL` | Downgraded to `basic_m` on `2026-09-29` |
+
 ## Known limitations
 
 - The data is synthetic, so it only reflects the scenarios built into the generator.
 - I started with BigQuery, but the free sandbox doesn't allow DML (MERGE, INSERT, UPDATE). Incremental models and snapshots need that, so I moved to DuckDB.
-- `stg_subscriptions` only knows the current plan. To get plan history I need a snapshot (SCD type 2) across two data loads.
+- `stg_subscriptions` only stores the current state of each subscription. `subs_snapshot` tracks changes across loads, though it only captures states that were present when `dbt snapshot` ran (intermediate changes between snapshot runs would not be seen).
 - If two duplicate rows have different values (for example a different amount), deduplication just picks one and nobody notices. I plan to add a test that catches conflicting duplicates in raw.
