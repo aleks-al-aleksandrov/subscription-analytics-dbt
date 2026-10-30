@@ -1,0 +1,182 @@
+version: 2
+
+models:
+  - name: dim_customer
+    description: "Customer dimension enriched with active subscription status. Grain: one row per customer_id."
+    columns:
+      - name: customer_id
+        description: "Primary key of the customer."
+        data_tests:
+          - unique
+          - not_null
+      - name: email
+        description: "Customer email, trimmed and lowercased; null when empty in the source."
+      - name: country
+        description: "ISO two-letter country code."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['BG', 'DE', 'ES', 'FR', 'GB', 'NL', 'RO']
+      - name: segment
+        description: "Customer segment: B2C or B2B."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['B2C', 'B2B']
+      - name: signup_date
+        description: "Date the customer signed up."
+        data_tests:
+          - not_null
+      - name: created_at
+        description: "Timestamp when the customer row was created in the source system."
+      - name: updated_at
+        description: "Timestamp when the customer row was last updated in the source system."
+      - name: is_active_customer
+        description: "True when the customer has at least one currently active subscription."
+        data_tests:
+          - not_null
+
+  - name: dim_plan
+    description: "Subscription plan dimension with normalized monthly price. Grain: one row per plan_id."
+    columns:
+      - name: plan_id
+        description: "Primary key of the plan."
+        data_tests:
+          - unique
+          - not_null
+      - name: plan_name
+        description: "Human-readable plan name."
+        data_tests:
+          - not_null
+      - name: billing_period
+        description: "Billing frequency: monthly or annual."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['monthly', 'annual']
+      - name: price_eur
+        description: "Billed price per billing period in EUR."
+        data_tests:
+          - not_null
+      - name: monthly_price_eur
+        description: "Normalized monthly recurring price in EUR (price_eur for monthly plans, price_eur / 12 rounded to 2 decimals for annual plans)."
+        data_tests:
+          - not_null
+
+  - name: fct_subscriptions
+    description: "Subscription fact table with normalized monthly recurring value and tenure. Grain: one row per subscription_id."
+    columns:
+      - name: subscription_id
+        description: "Primary key of the subscription."
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "Foreign key to dim_customer."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: plan_id
+        description: "Foreign key to dim_plan representing the current plan on the subscription."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_plan')
+                field: plan_id
+      - name: status
+        description: "Subscription lifecycle status: active or canceled."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['active', 'canceled']
+      - name: is_active
+        description: "True when status is active."
+        data_tests:
+          - not_null
+      - name: started_date
+        description: "Date the subscription started."
+        data_tests:
+          - not_null
+      - name: canceled_date
+        description: "Date the subscription was canceled; null while active."
+      - name: updated_at
+        description: "Timestamp when the subscription record was last updated."
+      - name: monthly_value_eur
+        description: "Normalized monthly recurring value of the subscription's plan in EUR."
+        data_tests:
+          - not_null
+      - name: tenure_days
+        description: "Days between started_date and canceled_date (or the dataset high-water mark date while active)."
+        data_tests:
+          - not_null
+
+  - name: fct_payments
+    description: "Payment transactions fact table linked to customers, subscriptions, and plans. Grain: one row per payment_id."
+    columns:
+      - name: payment_id
+        description: "Primary key of the payment."
+        data_tests:
+          - unique
+          - not_null
+      - name: subscription_id
+        description: "Foreign key to fct_subscriptions."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_subscriptions')
+                field: subscription_id
+      - name: customer_id
+        description: "Foreign key to dim_customer."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: plan_id
+        description: "Foreign key to dim_plan."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_plan')
+                field: plan_id
+      - name: payment_date
+        description: "Business date when the payment occurred."
+        data_tests:
+          - not_null
+      - name: amount_eur
+        description: "Billed payment amount in EUR."
+        data_tests:
+          - not_null
+      - name: currency
+        description: "ISO currency code of the transaction."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['EUR']
+      - name: status
+        description: "Transaction status: succeeded or failed."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['succeeded', 'failed']
+      - name: is_successful
+        description: "True when status is succeeded."
+        data_tests:
+          - not_null
+      - name: is_late_arrival
+        description: "True when the payment arrived in the source system after its payment_date."
+        data_tests:
+          - not_null
+      - name: created_at
+        description: "Timestamp when the payment record was created in the source system."
+        data_tests:
+          - not_null
