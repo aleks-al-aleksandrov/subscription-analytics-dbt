@@ -139,8 +139,8 @@ models:
               arguments:
                 to: ref('dim_customer')
                 field: customer_id
-      - name: plan_id
-        description: "Foreign key to dim_plan."
+      - name: current_plan_id
+        description: "Foreign key to dim_plan representing the subscription's current plan (not the historical plan at payment time)."
         data_tests:
           - not_null
           - relationships:

@@ -29,7 +29,7 @@ final as (
         payments.payment_id,
         payments.subscription_id,
         payments.customer_id,
-        subscriptions.plan_id,
+        subscriptions.plan_id as current_plan_id,
         payments.payment_date,
         payments.amount_eur,
         payments.currency,

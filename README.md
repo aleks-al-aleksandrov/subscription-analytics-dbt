@@ -70,7 +70,7 @@ git clone https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt.git
 cd subscription-analytics-dbt
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install dbt-core dbt-duckdb
+pip install -r requirements.txt
 
 # Batch 1: Initial load as of 2026-06-30
 python scripts\generate_data.py --as-of 2026-06-30
@@ -116,7 +116,7 @@ where payment_date >= (
 ### How it runs
 
 1. **Initial run (or `dbt run --select fct_payments --full-refresh`)**: `is_incremental()` evaluates to `false`, so dbt builds `main.fct_payments` from the entire `stg_payments` view (`14,111` rows for `--as-of 2026-06-30`).
-2. **Subsequent incremental runs (`dbt run --select fct_payments`)**: `is_incremental()` evaluates to `true`. dbt selects only rows from `stg_payments` with `payment_date >= max(payment_date) - interval '7 days'`, stages them in a temporary table, deletes matching `payment_id` rows from `main.fct_payments`, and inserts the staged rows (`18,864` total rows after `--as-of 2026-09-30`).
+2. **Subsequent incremental runs (`dbt run --select fct_payments`)**: `is_incremental()` evaluates to `true`. dbt selects only rows from `stg_payments` with `payment_date >= max(payment_date) - interval '7 days'`, stages them in a temporary table, deletes matching `payment_id` rows from `main.fct_payments`, and inserts the staged rows (`18,272` total rows after `--as-of 2026-09-30`).
 
 ### Why a 7-day lookback window?
 
@@ -186,6 +186,7 @@ The project runs **84 data tests** (`94` total build steps including models and 
 - **Source freshness / SLA checks**: Because the data is generated locally from CSVs rather than streamed from a live production database, `dbt source freshness` is not configured.
 - **Late arrivals beyond the 7-day lookback window**: If a payment arrives more than 7 days after its `payment_date` and after the high-water mark has advanced, an incremental run of `fct_payments` would not pick it up until `assert_payment_reconciliation.sql` flags the discrepancy or a `--full-refresh` is run.
 - **Historical MRR plan transitions**: `fct_mrr_monthly` joins against `fct_subscriptions` (current plan) rather than `snapshots.subs_snapshot`, so past months reflect the subscription's current plan rather than the historical plan prior to an upgrade/downgrade.
+- **`fct_payments.current_plan_id`**: `fct_payments.current_plan_id` is the subscription's current plan, not the plan at payment time.
 
 ## Project Constraints & Known Limitations
 
