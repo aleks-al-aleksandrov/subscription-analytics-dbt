@@ -31,6 +31,8 @@ jobs:
           cd subscription_analytics
           dbt debug --profiles-dir .
           dbt build --profiles-dir .
+          cd ..
+          python scripts/report_counts.py
 
       - name: Load second batch (2026-09-30) and run incremental + snapshot build
         run: |
@@ -38,4 +40,6 @@ jobs:
           python scripts/load_raw.py
           cd subscription_analytics
           dbt build --profiles-dir .
+          cd ..
+          python scripts/report_counts.py
 
