@@ -1,5 +1,7 @@
 # Subscription Analytics (dbt + DuckDB)
 
+[![dbt CI](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml/badge.svg)](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml)
+
 ## Purpose
 
 I built this project to practise analytics engineering end to end on a realistic problem: a subscription business with customers, plans, subscriptions and payments. The goal is to go from messy raw data to clean, tested models that can answer questions like "what is our MRR?" or "how many customers churned last month?".
