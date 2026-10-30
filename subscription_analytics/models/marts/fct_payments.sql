@@ -1,6 +1,20 @@
+{{
+    config(
+        materialized='incremental',
+        unique_key='payment_id',
+        incremental_strategy='delete+insert'
+    )
+}}
+
 with payments as (
     select *
     from {{ ref('stg_payments') }}
+    {% if is_incremental() %}
+    where payment_date >= (
+        select max(payment_date) - interval '7 days'
+        from {{ this }}
+    )
+    {% endif %}
 ),
 
 subscriptions as (

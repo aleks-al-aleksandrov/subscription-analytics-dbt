@@ -18,8 +18,8 @@ staging (views)               models/staging
   stg_customers, stg_plans, stg_subscriptions, stg_payments
         |
         v
-marts (tables)                models/marts   (in progress)
-  dim_customer, dim_plan, fct_subscriptions, fct_payments
+marts (tables & incremental)  models/marts
+  dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental)
 ```
 
 I keep the layers strict:
@@ -67,6 +67,36 @@ dbt build --profiles-dir .
 - **Deduplication in staging.** For customers I keep the newest row by `updated_at`. For payments I keep one row per `payment_id`, the one with the latest `created_at`.
 - **Flags, not filters.** I add `is_late_arrival` and `is_successful` as columns instead of dropping rows. That way each mart can decide for itself what to exclude.
 - **Tests on every layer.** Primary keys get `unique` and `not_null`, foreign keys get `relationships`, categories get `accepted_values`. Business rules that don't fit a generic test (positive amounts, a subscription can't be canceled before it starts) are singular tests in `tests/`.
+
+## Incremental loading (`fct_payments`)
+
+`fct_payments` is configured as an incremental model (`materialized='incremental'`, `unique_key='payment_id'`, `incremental_strategy='delete+insert'`).
+
+```sql
+{% if is_incremental() %}
+where payment_date >= (
+    select max(payment_date) - interval '7 days'
+    from {{ this }}
+)
+{% endif %}
+```
+
+### How it runs
+
+1. **Initial run (or `dbt run --select fct_payments --full-refresh`)**: `is_incremental()` evaluates to `false`, so dbt builds `main.fct_payments` from the entire `stg_payments` view (`14,111` rows for `--as-of 2026-06-30`).
+2. **Subsequent incremental runs (`dbt run --select fct_payments`)**: `is_incremental()` evaluates to `true`. dbt only reads rows from `stg_payments` whose `payment_date` is within 7 days of the current maximum `payment_date` in `fct_payments`, deletes any matching `payment_id` keys already in the target table, and inserts the refreshed batch.
+
+### Why a 7-day lookback window?
+
+In the source data, around 2% of payments arrive 3–6 days after their `payment_date` (`created_at > payment_date`). Filtering strictly on `payment_date > max(payment_date)` would miss transactions whose `payment_date` falls before the high-water mark but landed in the source system days later. A 7-day lookback window covers the 3–6 day arrival lag while keeping incremental scans small. Because `unique_key='payment_id'` is set, re-reading the last 7 days overwrites existing rows cleanly without creating duplicates.
+
+### Why `delete+insert` instead of `merge`?
+
+- **Adapter compatibility & simplicity**: In DuckDB, `delete+insert` stages the incoming slice in a temporary table, deletes matching `payment_id` rows from the target table in a single vectorized pass, and inserts the staged rows.
+- **Trade-offs & risks**:
+  - `delete+insert` replaces the entire row for matched keys, which is ideal here because we want the latest state of every column in the lookback window.
+  - On cloud warehouses with large clustered tables (like BigQuery or Snowflake), `merge` can sometimes avoid rewriting unchanged columns, whereas `delete+insert` marks deleted rows and appends new micro-partitions.
+  - If a payment arrived more than 7 days late, the lookback window would miss it; a periodic `--full-refresh` (or filtering on an ingestion watermark with a lookback) would be needed to catch extreme outliers.
 
 ## Known limitations
 
