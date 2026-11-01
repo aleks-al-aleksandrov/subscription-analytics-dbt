@@ -186,7 +186,7 @@ The project runs **84 data tests** (`94` total build steps including models and 
 - **Source freshness / SLA checks**: Because the data is generated locally from CSVs rather than streamed from a live production database, `dbt source freshness` is not configured.
 - **Late arrivals beyond the 7-day lookback window**: If a payment arrives more than 7 days after its `payment_date` and after the high-water mark has advanced, an incremental run of `fct_payments` would not pick it up until `assert_payment_reconciliation.sql` flags the discrepancy or a `--full-refresh` is run.
 - **Historical MRR plan transitions**: `fct_mrr_monthly` joins against `fct_subscriptions` (current plan) rather than `snapshots.subs_snapshot`, so past months reflect the subscription's current plan rather than the historical plan prior to an upgrade/downgrade.
-- **`fct_payments.current_plan_id`**: `fct_payments.current_plan_id` is the subscription's current plan, not the plan at payment time.
+- **`fct_payments.current_plan_id`**: This is the subscription's current plan, not the plan at payment time.
 
 ## Orchestration with Airflow
 
@@ -211,7 +211,7 @@ Open the Airflow UI at `http://localhost:8080` and trigger the `subscription_pip
 ### Key orchestration design choices
 
 - **Isolated dbt virtual environment (`/usr/local/airflow/dbt_venv`)**: `airflow/Dockerfile` installs `dbt-core==1.12.6` and `dbt-duckdb==1.11.1` into a dedicated virtualenv inside the container so dbt's dependencies never conflict with Airflow's internal Python environment.
-- **Named Docker volume for DuckDB (`DUCKDB_PATH`)**: DuckDB locks its database file during writes, which can fail on Windows-to-Linux bind mounts. `airflow/docker-compose.override.yml` mounts the repository at `/usr/local/airflow/project` and stores the DuckDB file in a named Linux volume (`duckdb_data:/usr/local/airflow/duckdb_data`) via `ENV DUCKDB_PATH=/usr/local/airflow/duckdb_data/subscription.duckdb`. Local CLI and GitHub Actions runs continue using the default local path.
+- **Named Docker volume for DuckDB (`DUCKDB_PATH`)**: DuckDB locks its database file during writes; to avoid potential file-locking conflicts across Windows-to-Linux bind mounts, `airflow/docker-compose.override.yml` mounts the repository code at `/usr/local/airflow/project` while storing the database in a dedicated named Linux volume (`duckdb_data:/usr/local/airflow/duckdb_data`) via `ENV DUCKDB_PATH=/usr/local/airflow/duckdb_data/subscription.duckdb`. Local CLI and GitHub Actions runs continue using the default local path.
 - **Single-writer concurrency guard (`max_active_runs=1`)**: Because DuckDB allows only one writer process at a time, the DAG enforces `max_active_runs=1` so two DAG runs never contend for the database lock.
 - **Idempotency & retries (`retries=2`)**: Every task is idempotent (`generate_data.py` uses a fixed seed, `load_raw.py` uses `CREATE OR REPLACE TABLE`, `dbt build` uses `delete+insert` incremental logic and timestamp snapshots), making automatic task retries safe.
 - **Out-of-band data verification gate (`report_counts`)**: `scripts/report_counts.py` opens DuckDB with `read_only=True`, prints row counts across `raw.payments`, `stg_payments`, `fct_payments`, and `snapshots.subs_snapshot`, and exits with code `1` if `fct_payments != stg_payments`.
