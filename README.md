@@ -1,6 +1,32 @@
 # Subscription Analytics (dbt + DuckDB)
 
 [![dbt CI](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml/badge.svg)](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml)
+[!dbt](https://img.shields.io/badge/dbt-v1.12-FF694B?style=flat&logo=dbt&logoColor=white)
+[!DuckDB](https://img.shields.io/badge/DuckDB-v1.11-FFF000?style=flat&logo=duckdb&logoColor=black)
+[!Airflow](https://img.shields.io/badge/Airflow-Astro_CLI-017CEE?style=flat&logo=apacheairflow&logoColor=white)
+[Tests](https://img.shields.io/badge/tests-84%20passed-success?style=flat)
+[!Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat&logo=python&logoColor=white)
+
+> **An end-to-end analytics engineering project**: staging views, dimensional marts, incremental payments with a 7-day lookback window, SCD Type 2 subscription snapshots, MRR metrics, 84 schema & custom financial tests, and containerized Airflow orchestration.
+
+---
+
+## Quick Navigation
+
+- [Purpose](#purpose)
+- [Architecture & Lineage](#architecture---lineage)
+- [Model Catalog & Grain](#model-catalog---grain)
+- [Synthetic Data Generation](#data)
+- [How to Run From Scratch](#how-to-run-from-scratch)
+- [Architectural Decisions & Trade-offs](#architectural-decisions---trade-offs)
+- [Incremental Loading (fct_payments)](#incremental-loading-fct_payments)
+- [Snapshots & SCD Type 2 History (subs_snapshot)](#snapshots---scd-type-2-history-subs_snapshot)
+- [Metrics (fct_mrr_monthly)](#metrics-fct_mrr_monthly)
+- [Data Quality & Test Coverage](#data-quality---test-coverage)
+- [Orchestration with Airflow](#orchestration-with-airflow)
+- [Project Constraints & Known Limitations](#project-constraints---known-limitations)
+
+---
 
 ## Purpose
 
