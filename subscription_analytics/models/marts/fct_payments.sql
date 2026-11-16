@@ -9,20 +9,22 @@
 with payments as (
     select *
     from {{ ref('stg_payments') }}
-    {% if is_incremental() %}
-    where payment_date >= (
-        select max(payment_date) - interval '7 days'
-        from {{ this }}
-    )
-    {% endif %}
 ),
 
 subscriptions as (
     select
         subscription_id,
-        plan_id
+        plan_id,
+        updated_at
     from {{ ref('stg_subscriptions') }}
 ),
+
+{% if is_incremental() %}
+watermark as (
+    select max(created_at) - interval '7 days' as reload_from
+    from {{ this }}
+),
+{% endif %}
 
 final as (
     select
@@ -40,6 +42,14 @@ final as (
     from payments
     left join subscriptions
         on payments.subscription_id = subscriptions.subscription_id
+    {% if is_incremental() %}
+    cross join watermark
+    -- reload rows that landed since the last run (by ingestion time, so any
+    -- arrival lag is covered) and rows whose subscription changed, so that
+    -- current_plan_id never goes stale
+    where payments.created_at >= watermark.reload_from
+       or subscriptions.updated_at >= watermark.reload_from
+    {% endif %}
 )
 
 select *
