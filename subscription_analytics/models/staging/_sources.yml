@@ -3,8 +3,18 @@ version: 2
 sources:
   - name: raw
     schema: raw
+    description: "Untouched copy of the source system CSVs, loaded by scripts/load_raw.py. Every table gets a _loaded_at timestamp at load time."
+    config:
+      loaded_at_field: _loaded_at
+      freshness:
+        warn_after: {count: 24, period: hour}
+        error_after: {count: 72, period: hour}
     tables:
       - name: customers
+        description: "One row per customer version; may contain duplicate customer_id rows with a later updated_at."
       - name: subscriptions
+        description: "One row per subscription, overwritten in place when the plan or status changes."
       - name: payments
+        description: "One row per payment attempt; may contain exact duplicate rows and late-arriving rows."
       - name: plans
+        description: "One row per subscription plan."

@@ -30,6 +30,7 @@ jobs:
           python scripts/load_raw.py
           cd subscription_analytics
           dbt debug --profiles-dir .
+          dbt source freshness --profiles-dir .
           dbt build --profiles-dir .
           cd ..
           python scripts/report_counts.py
@@ -39,6 +40,7 @@ jobs:
           python scripts/generate_data.py --as-of 2026-09-30
           python scripts/load_raw.py
           cd subscription_analytics
+          dbt source freshness --profiles-dir .
           dbt build --profiles-dir .
           cd ..
           python scripts/report_counts.py
