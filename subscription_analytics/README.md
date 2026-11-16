@@ -6,8 +6,9 @@ This folder contains the dbt project. See the root [`README.md`](../README.md) f
 
 - `models/staging/`: Views (`stg_customers`, `stg_plans`, `stg_subscriptions`, `stg_payments`), source definitions (`_sources.yml`), and staging schema tests (`_staging.yml`).
 - `snapshots/`: SCD Type 2 snapshot (`subs_snapshot.sql`) and snapshot schema tests (`_snapshots.yml`).
-- `models/marts/`: Dimension, fact, and metric models (`dim_customer`, `dim_plan`, `fct_subscriptions`, incremental `fct_payments`, `fct_mrr_monthly`) and schema tests (`_marts.yml`).
-- `tests/`: Singular SQL tests for business logic, raw duplicate conflict detection, MRR sanity, and financial reconciliation.
+- `models/intermediate/`: Shared building blocks (`int_months`, `int_subscription_plan_history`) with schema and unit tests (`_intermediate.yml`).
+- `models/marts/`: Dimension, fact, and metric models (`dim_customer`, `dim_plan`, `fct_subscriptions`, incremental `fct_payments`, `fct_mrr_monthly`, `fct_cohort_retention`), schema tests (`_marts.yml`) and unit tests (`_marts_unit_tests.yml`).
+- `tests/`: Singular SQL tests for business logic, raw duplicate conflict detection, MRR sanity, cohort retention, and financial reconciliation.
 
 ## Running Commands
 
@@ -15,6 +16,7 @@ From inside `subscription_analytics/` (with `.venv` activated and raw data loade
 
 ```powershell
 dbt debug --profiles-dir .
+dbt source freshness --profiles-dir .
 dbt build --profiles-dir .
 dbt docs generate --profiles-dir .
 dbt docs serve --profiles-dir .

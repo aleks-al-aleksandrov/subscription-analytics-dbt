@@ -1,13 +1,13 @@
 # Subscription Analytics (dbt + DuckDB)
 
 [![dbt CI](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml/badge.svg)](https://github.com/aleks-al-aleksandrov/subscription-analytics-dbt/actions/workflows/dbt.yml)
-[!dbt](https://img.shields.io/badge/dbt-v1.12-FF694B?style=flat&logo=dbt&logoColor=white)
-[!DuckDB](https://img.shields.io/badge/DuckDB-v1.11-FFF000?style=flat&logo=duckdb&logoColor=black)
-[!Airflow](https://img.shields.io/badge/Airflow-Astro_CLI-017CEE?style=flat&logo=apacheairflow&logoColor=white)
-[Tests](https://img.shields.io/badge/tests-84%20passed-success?style=flat)
-[!Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat&logo=python&logoColor=white)
+![dbt](https://img.shields.io/badge/dbt-v1.12-FF694B?style=flat&logo=dbt&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-v1.11-FFF000?style=flat&logo=duckdb&logoColor=black)
+![Airflow](https://img.shields.io/badge/Airflow-Astro_CLI-017CEE?style=flat&logo=apacheairflow&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-109%20passed-success?style=flat)
+![Python](https://img.shields.io/badge/python-3.13-3776AB?style=flat&logo=python&logoColor=white)
 
-> **An end-to-end analytics engineering project**: staging views, dimensional marts, incremental payments with a 7-day lookback window, SCD Type 2 subscription snapshots, MRR metrics, 84 schema & custom financial tests, and containerized Airflow orchestration.
+> **An end-to-end analytics engineering project**: staging views, dimensional marts, incremental payments with an ingestion-time watermark, SCD Type 2 subscription snapshots, MRR, churn and cohort retention metrics, 103 schema & custom financial tests plus 6 unit tests, source freshness checks, and containerized Airflow orchestration.
 
 ---
 
@@ -21,7 +21,7 @@
 - [Architectural Decisions & Trade-offs](#architectural-decisions---trade-offs)
 - [Incremental Loading (fct_payments)](#incremental-loading-fct_payments)
 - [Snapshots & SCD Type 2 History (subs_snapshot)](#snapshots---scd-type-2-history-subs_snapshot)
-- [Metrics (fct_mrr_monthly)](#metrics-fct_mrr_monthly)
+- [Metrics (fct_mrr_monthly, fct_cohort_retention)](#metrics-fct_mrr_monthly-fct_cohort_retention)
 - [Data Quality & Test Coverage](#data-quality---test-coverage)
 - [Orchestration with Airflow](#orchestration-with-airflow)
 - [Project Constraints & Known Limitations](#project-constraints---known-limitations)
@@ -50,8 +50,13 @@ staging (views)               models/staging
         +---> snapshots (SCD Type 2)     snapshots/subs_snapshot.sql
         |
         v
+intermediate (views)          models/intermediate
+  int_months, int_subscription_plan_history
+        |
+        v
 marts (tables & incremental)  models/marts
-  dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental), fct_mrr_monthly
+  dim_customer, dim_plan, fct_subscriptions, fct_payments (incremental),
+  fct_mrr_monthly, fct_cohort_retention
 ```
 
 I keep the layers strict:
@@ -59,6 +64,7 @@ I keep the layers strict:
 - **raw** is an untouched copy of the source CSVs loaded into the `raw` schema.
 - **staging** (`models/staging/`) has one view per source table. This is where I rename, cast, trim, standardize casing, and deduplicate. No joins happen here.
 - **snapshots** (`snapshots/subs_snapshot.sql`) captures SCD Type 2 history (`dbt_valid_from`, `dbt_valid_to`) on top of `stg_subscriptions` across multiple loads.
+- **intermediate** (`models/intermediate/`) holds building blocks shared by several marts: the calendar month spine and the plan history of each subscription derived from the snapshot.
 - **marts** (`models/marts/`) joins staging models into dimensions, facts, and monthly metrics, each with a documented grain and schema tests.
 
 ### Model Catalog & Grain
@@ -74,7 +80,10 @@ I keep the layers strict:
 | `dim_plan` | Marts | Table | One row per plan (with normalized `monthly_price_eur`) | `plan_id` |
 | `fct_subscriptions` | Marts | Table | One row per subscription (with `monthly_value_eur` and `tenure_days`) | `subscription_id` |
 | `fct_payments` | Marts | Incremental (`delete+insert`) | One row per payment transaction | `payment_id` |
+| `int_months` | Intermediate | View | One row per calendar month in the dataset | `month_start_date` |
+| `int_subscription_plan_history` | Intermediate | View | One row per subscription and plan validity period | `subscription_id` + `valid_from_date` |
 | `fct_mrr_monthly` | Marts | Table | One row per calendar month (`month_end_date`) | `month_end_date` |
+| `fct_cohort_retention` | Marts | Table | One row per start-month cohort and months since start | `cohort_month` + `months_since_start` |
 
 ## Data
 
@@ -132,21 +141,31 @@ dbt docs serve --profiles-dir .
 
 ```sql
 {% if is_incremental() %}
-where payment_date >= (
-    select max(payment_date) - interval '7 days'
+watermark as (
+    select max(created_at) - interval '7 days' as reload_from
     from {{ this }}
-)
+),
+{% endif %}
+...
+{% if is_incremental() %}
+cross join watermark
+where payments.created_at >= watermark.reload_from
+   or subscriptions.updated_at >= watermark.reload_from
 {% endif %}
 ```
 
 ### How it runs
 
 1. **Initial run (or `dbt run --select fct_payments --full-refresh`)**: `is_incremental()` evaluates to `false`, so dbt builds `main.fct_payments` from the entire `stg_payments` view (`14,111` rows for `--as-of 2026-06-30`).
-2. **Subsequent incremental runs (`dbt run --select fct_payments`)**: `is_incremental()` evaluates to `true`. dbt selects only rows from `stg_payments` with `payment_date >= max(payment_date) - interval '7 days'`, stages them in a temporary table, deletes matching `payment_id` rows from `main.fct_payments`, and inserts the staged rows (`18,272` total rows after `--as-of 2026-09-30`).
+2. **Subsequent incremental runs (`dbt run --select fct_payments`)**: `is_incremental()` evaluates to `true`. dbt selects only the rows from `stg_payments` that landed since the last run (`created_at >= max(created_at) - interval '7 days'`) or that belong to a subscription changed since then (`updated_at` on `stg_subscriptions`), stages them in a temporary table, deletes matching `payment_id` rows from `main.fct_payments`, and inserts the staged rows (`18,272` total rows after `--as-of 2026-09-30`).
 
-### Why a 7-day lookback window?
+### Why filter on `created_at` and not `payment_date`?
 
-In the source data, around 2% of payments arrive 3–6 days after their `payment_date` (`created_at > payment_date`). Filtering strictly on `payment_date > max(payment_date)` would miss transactions whose `payment_date` falls before the high-water mark but landed in the source system days later. A 7-day lookback window covers the 3–6 day arrival lag while keeping incremental scans small. Because `unique_key='payment_id'` is set, re-reading the last 7 days overwrites existing rows cleanly without creating duplicates.
+In the source data, around 2% of payments arrive 3–6 days after their `payment_date` (`created_at > payment_date`). The first version of this model filtered on `payment_date >= max(payment_date) - 7 days`. That covers a 3–6 day lag, but a payment arriving more than 7 days late would be skipped silently. `created_at` is the time the row landed in the source system, so a late row always has a `created_at` above the previous high-water mark, whatever its `payment_date` is. The 7-day lookback stays as a safety margin for rows committed out of order. Because `unique_key='payment_id'` is set, re-reading those days overwrites existing rows without creating duplicates.
+
+### Why reload payments of changed subscriptions?
+
+`current_plan_id` comes from a join to `stg_subscriptions`. With a filter on payments alone, old payment rows kept the plan the subscription had when they were first loaded: after the `2026-09-30` batch, `153` payments on `36` subscriptions still pointed at the previous plan. The second condition (`subscriptions.updated_at >= watermark.reload_from`) reloads every payment of a subscription that changed, and `assert_payment_plan_is_current.sql` fails the build if the column ever drifts again.
 
 ### Why `delete+insert` instead of `merge`?
 
@@ -154,7 +173,7 @@ In the source data, around 2% of payments arrive 3–6 days after their `payment
 - **Trade-offs & risks**:
   - `delete+insert` replaces the entire row for matched keys, which is ideal here because we want the latest state of every column in the lookback window.
   - On cloud warehouses with large partitioned/clustered tables, `merge` can sometimes avoid rewriting unchanged columns, whereas `delete+insert` marks deleted rows and appends new micro-partitions.
-  - If a payment arrived more than 7 days late, the lookback window would miss it; a periodic `--full-refresh` (or filtering on an ingestion watermark with a lookback) would be needed to catch extreme outliers.
+  - Reloading all payments of a changed subscription rewrites more rows than strictly needed. That is cheap at this volume; on a large fact table I would keep the plan out of the fact and join the dimension at query time instead.
 
 ## Snapshots & SCD Type 2 History (`subs_snapshot`)
 
@@ -177,7 +196,7 @@ Example rows from `snapshots.subs_snapshot`:
 | `sub_00095` | `standard_m` | `active` | `2026-03-06 00:00:00` | `2026-09-29 00:00:00` | Initial `standard_m` plan |
 | `sub_00095` | `basic_m` | `active` | `2026-09-29 00:00:00` | `NULL` | Downgraded to `basic_m` on `2026-09-29` |
 
-## Metrics (`fct_mrr_monthly`)
+## Metrics (`fct_mrr_monthly`, `fct_cohort_retention`)
 
 `fct_mrr_monthly` summarizes Monthly Recurring Revenue at a calendar-month grain (`month_end_date` is the primary key).
 
@@ -187,13 +206,27 @@ Example rows from `snapshots.subs_snapshot`:
 - **Normalized monthly recurring value (`monthly_value_eur`)**:
   - Monthly plans contribute their full `price_eur` (`9.00`, `19.00`, or `39.00` EUR).
   - Annual plans (`standard_a` at `190.00` EUR/year) are normalized to `round(price_eur / 12.0, 2)` (`15.83` EUR/month).
+- **Plan at month-end**: Each active subscription is priced at the plan it was on at `month_end_date`, taken from `int_subscription_plan_history` (built on `subs_snapshot`), not at its current plan. A subscription that downgraded in September still counts at its old price in August: August 2026 MRR is `29,820.67` EUR with historical plans, against `29,830.67` EUR if every subscription were priced at its current plan.
 - **`mrr_eur`**: The sum of `monthly_value_eur` across all subscriptions active as of `month_end_date` (`30,009.16` EUR as of `2026-09-30` across `1,735` active subscriptions).
 - **`arr_eur`**: `mrr_eur * 12` (`360,109.92` EUR as of `2026-09-30`).
-- **Month spine**: Generated dynamically from `min(started_date)` through `max(updated_at)` so every month in the dataset range is represented.
+- **`subscription_churn_rate`**: `churned_subscriptions` in the month divided by `active_subscriptions` at the end of the previous month (`17 / 1,723 = 0.0099` for September 2026). It is null for the first month, which has no previous month.
+- **Month spine**: `int_months` is generated dynamically from `min(started_date)` through `max(updated_at)` so every month in the dataset range is represented.
+
+### Cohort retention (`fct_cohort_retention`)
+
+Subscriptions are grouped by the month they started (`cohort_month`). For every later month the model counts how many of them are still active at month-end (`retained_subscriptions`) and divides by `cohort_size` to get `retention_rate`. Example, the June 2025 cohort of `99` subscriptions:
+
+| `months_since_start` | `retained_subscriptions` | `retention_rate` |
+| :--- | :--- | :--- |
+| `0` | `99` | `1.0000` |
+| `3` | `97` | `0.9798` |
+| `6` | `95` | `0.9596` |
+| `12` | `86` | `0.8687` |
+| `15` | `84` | `0.8485` |
 
 ## Data Quality & Test Coverage
 
-The project runs **84 data tests** (`94` total build steps including models and snapshot) across generic schema assertions and custom singular SQL tests:
+The project runs **103 data tests** and **6 unit tests** (`122` total build steps including models and snapshot) across generic schema assertions, custom singular SQL tests and unit tests on fixed input rows:
 
 ### What is covered by tests
 
@@ -206,13 +239,25 @@ The project runs **84 data tests** (`94` total build steps including models and 
    - `assert_no_conflicting_raw_duplicates.sql`: Checks `raw.payments` and `raw.customers` to ensure duplicate primary keys never contain conflicting cleaned business attributes (preventing `row_number()` deduplication from silently hiding data corruption).
    - `assert_payment_reconciliation.sql`: Financial reconciliation test ensuring the count and total `amount_eur` of successful payments (`is_successful = true`) in `fct_payments` match `stg_payments` to the cent.
    - `assert_mrr_sanity.sql`: Ensures monthly MRR and active subscription counts are strictly positive and non-null for every calendar month in `fct_mrr_monthly`, preventing an empty or unloaded month from silently displaying as `0.00` EUR MRR.
+   - `assert_payment_plan_is_current.sql`: Ensures `fct_payments.current_plan_id` equals the subscription's plan in `stg_subscriptions`, so an incremental run cannot leave stale plans on old payments.
+   - `assert_plan_history_one_current_version.sql`: Ensures every subscription has exactly one current plan version and no two versions starting on the same day, so the MRR join to the plan history cannot fan out.
+   - `assert_mrr_matches_current_subscriptions.sql`: Reconciles two independent calculations: the latest month of `fct_mrr_monthly` (plans from the snapshot history) must equal the sum over active rows in `fct_subscriptions`.
+   - `assert_cohort_retention_valid.sql`: Ensures one row per cohort and month, retained subscriptions never above the cohort size, and retention never increasing from one month to the next.
+5. **Unit tests (`_staging_unit_tests.yml`, `_intermediate.yml`, `_marts_unit_tests.yml`)**: Data tests check the rows that happen to be loaded; unit tests check the logic itself on a few hand-written input rows, before the model is built.
+   - `stg_customers`: duplicates collapse to the latest `updated_at`; email and country are cleaned; empty email becomes null.
+   - `stg_payments`: exact duplicates collapse to one row; `is_successful` and `is_late_arrival` are set correctly.
+   - `dim_plan`: an annual price of `190.00` becomes `15.83` per month.
+   - `dim_customer`: one row per customer with several subscriptions; a customer with no subscription is inactive, not null.
+   - `fct_payments` in incremental mode: a new payment, a payment that is two months late and an old payment on a subscription that changed plan are reloaded; an untouched old payment is skipped.
+   - `int_subscription_plan_history`: the first version starts at the subscription start date, later versions at their snapshot date, and only the open version is current.
+6. **Source freshness (`dbt source freshness`)**: `scripts/load_raw.py` stamps every raw row with `_loaded_at`. `_sources.yml` warns when a raw table is older than 24 hours and errors after 72 hours. CI runs the check after each load.
 
 ### What remains uncovered
 
-- **Source freshness / SLA checks**: Because the data is generated locally from CSVs rather than streamed from a live production database, `dbt source freshness` is not configured.
-- **Late arrivals beyond the 7-day lookback window**: If a payment arrives more than 7 days after its `payment_date` and after the high-water mark has advanced, an incremental run of `fct_payments` would not pick it up until `assert_payment_reconciliation.sql` flags the discrepancy or a `--full-refresh` is run.
-- **Historical MRR plan transitions**: `fct_mrr_monthly` joins against `fct_subscriptions` (current plan) rather than `snapshots.subs_snapshot`, so past months reflect the subscription's current plan rather than the historical plan prior to an upgrade/downgrade.
-- **`fct_payments.current_plan_id`**: This is the subscription's current plan, not the plan at payment time.
+- **Freshness of the source system itself**: `_loaded_at` says when the CSVs were loaded, not when the source last produced data. With a real source I would point `loaded_at_field` at an ingestion timestamp written by the extract tool.
+- **Rows changed in place in the source**: The incremental filter on `fct_payments` relies on `created_at`. If the source updated an old payment without touching `created_at` (for example a status correction), an incremental run would not pick it up until `assert_payment_reconciliation.sql` flags the discrepancy or a `--full-refresh` is run.
+- **Plan changes before the first snapshot**: The snapshot only knows the plans it has seen. A subscription that changed plan before the first `dbt snapshot` run (`2026-06-30`) has no older version, so `int_subscription_plan_history` stretches its first known plan back to the start date and earlier months are priced at that plan. Changes after the first snapshot are priced correctly.
+- **`fct_payments.current_plan_id`**: This is the subscription's current plan (kept current on every incremental run), not the plan at payment time.
 
 ## Orchestration with Airflow
 
@@ -231,7 +276,7 @@ astro dev start
 
 Open the Airflow UI at `http://localhost:8080` and trigger the `subscription_pipeline` DAG twice:
 
-1. **First run (`as_of = "2026-06-30"`)**: Generates the initial dataset, loads `raw.*`, runs `dbt build` (`94/94` checks green), and verifies via `scripts/report_counts.py` that `fct_payments` (`14,111` rows) matches `stg_payments`.
+1. **First run (`as_of = "2026-06-30"`)**: Generates the initial dataset, loads `raw.*`, runs `dbt build` (`122/122` checks green), and verifies via `scripts/report_counts.py` that `fct_payments` (`14,111` rows) matches `stg_payments`.
 2. **Second run (`as_of = "2026-09-30"`)**: Generates the second batch, loads `raw.*`, runs the incremental update on `fct_payments` (`18,272` rows) and SCD Type 2 snapshot on `subs_snapshot` (`2,084` total rows, `84` closed historical versions), and passes the `report_counts` reconciliation gate.
 
 ### Key orchestration design choices
