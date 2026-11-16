@@ -211,11 +211,37 @@ models:
         data_tests:
           - not_null
       - name: mrr_eur
-        description: "Total normalized Monthly Recurring Revenue in EUR across all subscriptions active at month_end_date."
+        description: "Total normalized Monthly Recurring Revenue in EUR across all subscriptions active at month_end_date, priced at the plan each subscription was on at month_end_date (from int_subscription_plan_history)."
         data_tests:
           - not_null
       - name: arr_eur
         description: "Annualized Recurring Revenue in EUR (mrr_eur * 12)."
         data_tests:
           - not_null
+      - name: subscription_churn_rate
+        description: "Subscriptions canceled during the month divided by subscriptions active at the end of the previous month. Null for the first month, which has no previous month."
 
+
+  - name: fct_cohort_retention
+    description: "Subscription retention by start-month cohort. Grain: one row per cohort_month and months_since_start."
+    columns:
+      - name: cohort_month
+        description: "First day of the month in which the cohort's subscriptions started."
+        data_tests:
+          - not_null
+      - name: months_since_start
+        description: "Whole months between cohort_month and the observed month (0 = the start month itself)."
+        data_tests:
+          - not_null
+      - name: cohort_size
+        description: "Number of subscriptions that started in cohort_month."
+        data_tests:
+          - not_null
+      - name: retained_subscriptions
+        description: "Subscriptions of the cohort still active at the end of the observed month."
+        data_tests:
+          - not_null
+      - name: retention_rate
+        description: "retained_subscriptions divided by cohort_size, between 0 and 1."
+        data_tests:
+          - not_null

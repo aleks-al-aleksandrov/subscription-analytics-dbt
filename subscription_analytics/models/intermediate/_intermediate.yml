@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: int_months
+    description: "Calendar month spine covering the dataset, from the first subscription start to the latest subscription update. Grain: one row per calendar month."
+    columns:
+      - name: month_start_date
+        description: "First calendar day of the month (primary key)."
+        data_tests:
+          - unique
+          - not_null
+      - name: month_end_date
+        description: "Last calendar day of the month."
+        data_tests:
+          - unique
+          - not_null
+
+  - name: int_subscription_plan_history
+    description: "Plan of every subscription over time, built from the SCD Type 2 snapshot. Grain: one row per subscription_id and validity period (valid_from_date inclusive, valid_to_date exclusive)."
+    columns:
+      - name: subscription_id
+        description: "Subscription the version belongs to."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_subscriptions')
+                field: subscription_id
+      - name: plan_id
+        description: "Plan the subscription was on during this period."
+        data_tests:
+          - not_null
+      - name: monthly_value_eur
+        description: "Normalized monthly recurring value of that plan in EUR."
+        data_tests:
+          - not_null
+      - name: valid_from_date
+        description: "First day the version applies. For the first known version this is the subscription start date."
+        data_tests:
+          - not_null
+      - name: valid_to_date
+        description: "First day the version no longer applies; null for the current version."
+      - name: is_current
+        description: "True for the version that is valid now."
+        data_tests:
+          - not_null
+
+unit_tests:
+  - name: int_subscription_plan_history_builds_contiguous_periods
+    description: "The first version starts at the subscription start date, later versions start at their snapshot date, and only the open version is current."
+    model: int_subscription_plan_history
+    given:
+      - input: ref('subs_snapshot')
+        rows:
+          - {subscription_id: s1, plan_id: standard_m, started_date: '2026-01-10', dbt_valid_from: '2026-03-06 00:00:00', dbt_valid_to: '2026-09-29 00:00:00'}
+          - {subscription_id: s1, plan_id: basic_m, started_date: '2026-01-10', dbt_valid_from: '2026-09-29 00:00:00', dbt_valid_to: null}
+          - {subscription_id: s2, plan_id: basic_m, started_date: '2026-02-01', dbt_valid_from: '2026-02-01 00:00:00', dbt_valid_to: null}
+      - input: ref('dim_plan')
+        rows:
+          - {plan_id: basic_m, monthly_price_eur: 9.00}
+          - {plan_id: standard_m, monthly_price_eur: 19.00}
+    expect:
+      rows:
+        - {subscription_id: s1, plan_id: standard_m, monthly_value_eur: 19.00, valid_from_date: '2026-01-10', valid_to_date: '2026-09-29', is_current: false}
+        - {subscription_id: s1, plan_id: basic_m, monthly_value_eur: 9.00, valid_from_date: '2026-09-29', valid_to_date: null, is_current: true}
+        - {subscription_id: s2, plan_id: basic_m, monthly_value_eur: 9.00, valid_from_date: '2026-02-01', valid_to_date: null, is_current: true}

@@ -3,25 +3,14 @@ with subscriptions as (
     from {{ ref('fct_subscriptions') }}
 ),
 
-date_bounds as (
-    select
-        cast(date_trunc('month', min(started_date)) as date) as first_month_start,
-        cast(date_trunc('month', max(cast(updated_at as date))) as date) as last_month_start
-    from subscriptions
+months as (
+    select *
+    from {{ ref('int_months') }}
 ),
 
-months as (
-    select
-        cast(month_start as date) as month_start_date,
-        cast(last_day(cast(month_start as date)) as date) as month_end_date
-    from date_bounds,
-    unnest(
-        generate_series(
-            date_bounds.first_month_start,
-            date_bounds.last_month_start,
-            interval 1 month
-        )
-    ) as t(month_start)
+plan_history as (
+    select *
+    from {{ ref('int_subscription_plan_history') }}
 ),
 
 monthly_summary as (
@@ -60,7 +49,7 @@ monthly_summary as (
                     case
                         when subscriptions.started_date <= months.month_end_date
                          and (subscriptions.canceled_date is null or subscriptions.canceled_date > months.month_end_date)
-                        then subscriptions.monthly_value_eur
+                        then plan_history.monthly_value_eur
                         else 0
                     end
                 ),
@@ -69,6 +58,11 @@ monthly_summary as (
         ) as mrr_eur
     from months
     cross join subscriptions
+    -- at most one plan version is valid at a month end, so this join cannot fan out
+    left join plan_history
+        on subscriptions.subscription_id = plan_history.subscription_id
+        and plan_history.valid_from_date <= months.month_end_date
+        and (plan_history.valid_to_date is null or plan_history.valid_to_date > months.month_end_date)
     group by
         months.month_start_date,
         months.month_end_date
@@ -83,7 +77,12 @@ final as (
         new_subscriptions,
         churned_subscriptions,
         mrr_eur,
-        cast(mrr_eur * 12 as decimal(12, 2)) as arr_eur
+        cast(mrr_eur * 12 as decimal(12, 2)) as arr_eur,
+        cast(
+            churned_subscriptions * 1.0
+            / nullif(lag(active_subscriptions) over (order by month_start_date), 0)
+            as decimal(6, 4)
+        ) as subscription_churn_rate
     from monthly_summary
 )
 
