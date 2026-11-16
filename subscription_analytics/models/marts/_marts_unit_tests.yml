@@ -1,0 +1,65 @@
+version: 2
+
+unit_tests:
+  - name: dim_plan_normalises_annual_price_to_monthly
+    description: "Monthly plans keep their price; annual plans are divided by 12 and rounded to 2 decimals."
+    model: dim_plan
+    given:
+      - input: ref('stg_plans')
+        rows:
+          - {plan_id: standard_m, plan_name: Standard, billing_period: monthly, price_eur: 19.00}
+          - {plan_id: standard_a, plan_name: Standard Annual, billing_period: annual, price_eur: 190.00}
+    expect:
+      rows:
+        - {plan_id: standard_m, monthly_price_eur: 19.00}
+        - {plan_id: standard_a, monthly_price_eur: 15.83}
+
+  - name: dim_customer_is_active_when_any_subscription_is_active
+    description: "One row per customer even with several subscriptions; customers without subscriptions are inactive, not null."
+    model: dim_customer
+    given:
+      - input: ref('stg_customers')
+        rows:
+          - {customer_id: c1}
+          - {customer_id: c2}
+          - {customer_id: c3}
+      - input: ref('stg_subscriptions')
+        rows:
+          - {subscription_id: s1, customer_id: c1, is_active: false}
+          - {subscription_id: s2, customer_id: c1, is_active: true}
+          - {subscription_id: s3, customer_id: c2, is_active: false}
+    expect:
+      rows:
+        - {customer_id: c1, is_active_customer: true}
+        - {customer_id: c2, is_active_customer: false}
+        - {customer_id: c3, is_active_customer: false}
+
+  - name: fct_payments_incremental_reloads_new_late_and_changed_rows
+    description: "On an incremental run the model picks up new payments, payments that arrived late by any number of days, and old payments whose subscription changed plan. Untouched old payments are skipped."
+    model: fct_payments
+    overrides:
+      macros:
+        is_incremental: true
+    given:
+      # sql format, so the test also runs before fct_payments exists (fresh database, CI)
+      - input: this
+        format: sql
+        rows: |
+          select
+              'p_old' as payment_id,
+              cast('2026-06-30 12:00:00' as timestamp) as created_at
+      - input: ref('stg_payments')
+        rows:
+          - {payment_id: p_old, subscription_id: s1, payment_date: '2026-06-01', created_at: '2026-06-01 08:00:00'}
+          - {payment_id: p_new, subscription_id: s1, payment_date: '2026-07-05', created_at: '2026-07-05 08:00:00'}
+          - {payment_id: p_very_late, subscription_id: s1, payment_date: '2026-05-01', created_at: '2026-07-02 08:00:00'}
+          - {payment_id: p_plan_changed, subscription_id: s2, payment_date: '2026-03-01', created_at: '2026-03-01 08:00:00'}
+      - input: ref('stg_subscriptions')
+        rows:
+          - {subscription_id: s1, plan_id: basic_m, updated_at: '2026-01-01 00:00:00'}
+          - {subscription_id: s2, plan_id: premium_m, updated_at: '2026-07-10 00:00:00'}
+    expect:
+      rows:
+        - {payment_id: p_new, current_plan_id: basic_m}
+        - {payment_id: p_very_late, current_plan_id: basic_m}
+        - {payment_id: p_plan_changed, current_plan_id: premium_m}
